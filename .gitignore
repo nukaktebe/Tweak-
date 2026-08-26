@@ -13,3 +13,5 @@ node_modules/
 
 # Локальный конфиг с ключом API — не коммитить
 config.js
+.vercel
+.env*

@@ -116,7 +116,12 @@ const сервер = http.createServer(async function (req, res) {
                 res.end(JSON.stringify({ ошибка: 'Слишком большой или повреждённый запрос' }));
                 return;
             }
-            const псевдоReq = { method: req.method, body: сыроеТело };
+            const псевдоReq = {
+                method: req.method,
+                body: сыроеТело,
+                headers: req.headers || {},
+                socket: req.socket
+            };
             const обработчик = url.pathname === '/api/route' ? handlerМаршрута : handlerПогоды;
             await обработчик(псевдоReq, обёрткаОтвета(res));
             return;

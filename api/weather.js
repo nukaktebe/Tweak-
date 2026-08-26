@@ -5,8 +5,14 @@
 //   за те же календарные даты последние 5 лет.
 // ============================================================
 
+import { ipКлиента, проверитьRateLimit, разобратьТело, отклонить } from './guard.js';
+
 const ГЕОКОД = 'https://geocoding-api.open-meteo.com/v1/search';
 const АРХИВ = 'https://archive-api.open-meteo.com/v1/archive';
+const ЛИМИТ_WEATHER = 30;
+const ОКНО_WEATHER_МС = 10 * 60 * 1000;
+const МАКС_ЭТАПОВ = 12;
+const МАКС_УНИКАЛЬНЫХ = 8;
 
 const кэшГео = new Map();
 const кэшПогоды = new Map();
@@ -216,17 +222,19 @@ export default async function handler(req, res) {
         return;
     }
 
-    let тело = req.body;
-    if (typeof тело === 'string') {
-        try {
-            тело = JSON.parse(тело || '{}');
-        } catch (e) {
-            res.status(400).json({ ошибка: 'Некорректный JSON в теле запроса' });
-            return;
-        }
+    const лимит = проверитьRateLimit('weather', ipКлиента(req), ЛИМИТ_WEATHER, ОКНО_WEATHER_МС);
+    if (!лимит.ok) {
+        отклонить(res, лимит.статус, лимит.ошибка);
+        return;
     }
-    тело = тело || {};
-    const сырыеЭтапы = Array.isArray(тело.этапы) ? тело.этапы.slice(0, 24) : [];
+
+    const разобрано = разобратьТело(req);
+    if (!разобрано.ok) {
+        отклонить(res, разобрано.статус, разобрано.ошибка);
+        return;
+    }
+    const тело = разобрано.тело || {};
+    const сырыеЭтапы = Array.isArray(тело.этапы) ? тело.этапы.slice(0, МАКС_ЭТАПОВ) : [];
     const этапы = сырыеЭтапы.map(function (этап) {
         const место = String((этап && этап.место) || '').slice(0, 80);
         const датаОтISO = этап && этап.датаОтISO;
@@ -248,14 +256,18 @@ export default async function handler(req, res) {
     try {
         const уникальные = [];
         const индекс = new Map();
-        этапы.forEach(function (этап, i) {
-            const место = этап && этап.место;
-            const датаОтISO = этап && этап.датаОтISO;
-            const датаДоISO = этап && этап.датаДоISO;
-            const ключ = место + '|' + датаОтISO + '|' + датаДоISO;
+        этапы.forEach(function (этап) {
+            const ключ = этап.место + '|' + этап.датаОтISO + '|' + этап.датаДоISO;
             if (!индекс.has(ключ)) {
+                if (уникальные.length >= МАКС_УНИКАЛЬНЫХ) {
+                    return;
+                }
                 индекс.set(ключ, уникальные.length);
-                уникальные.push({ место, датаОтISO, датаДоISO });
+                уникальные.push({
+                    место: этап.место,
+                    датаОтISO: этап.датаОтISO,
+                    датаДоISO: этап.датаДоISO
+                });
             }
         });
 
@@ -266,6 +278,9 @@ export default async function handler(req, res) {
 
         const результат = этапы.map(function (этап) {
             const ключ = этап.место + '|' + этап.датаОтISO + '|' + этап.датаДоISO;
+            if (!индекс.has(ключ)) {
+                return null;
+            }
             return погоды[индекс.get(ключ)] || null;
         });
 
